@@ -3,7 +3,7 @@ from io import BytesIO
 import pandas as pd
 from openpyxl import load_workbook
 
-from processor import export_summary_workbook, load_customer_mapping, process_files, transform_dalian
+from processor import export_summary_workbook, load_customer_mapping, process_files, transform_dalian, transform_export_file
 
 
 def to_excel_bytes(frame: pd.DataFrame) -> BytesIO:
@@ -65,6 +65,25 @@ def sample_tieling() -> BytesIO:
                     "生产": "CA1131021          麦乐鸡块 500g*30",
                     "发票数量(kg)": 3750,
                     "销售单价": 17.83,
+                },
+            ]
+        )
+    )
+
+
+def sample_invoice_detail() -> BytesIO:
+    return to_excel_bytes(
+        pd.DataFrame(
+            [
+                {
+                    "Unnamed: 0": "CA1131021          麦乐鸡块 500g*30",
+                    "发票数量(kg)": 3750,
+                    "销售单价": 17.83,
+                },
+                {
+                    "Unnamed: 0": "CA1131022          经典盐酥鸡 3kg*4",
+                    "发票数量(kg)": 15000,
+                    "销售单价": 22.15,
                 },
             ]
         )
@@ -137,3 +156,19 @@ def test_dalian_accepts_alternate_product_name_column():
     assert row["月销量（吨）"] == 2.4
     assert row["单价(元/吨)"] == 3880
     assert unmapped.empty
+
+
+def test_auto_detects_invoice_detail_format():
+    tables, unmapped = transform_export_file(sample_invoice_detail(), "大连")
+
+    row = tables[tables["产品名称"] == "麦乐鸡块 500g*30"].iloc[0]
+    assert row["月销量（吨）"] == 3.75
+    assert round(row["单价(元/吨)"], 6) == 17830
+    assert row["外销市场"] == "香港"
+    assert unmapped.empty
+
+
+def test_process_files_handles_mixed_formats():
+    tables = process_files(sample_invoice_detail(), sample_tieling(), sample_mapping())
+    assert not tables.final.empty
+    assert "小计" in set(tables.final["产品名称"])

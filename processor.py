@@ -70,8 +70,16 @@ def _number(value: object) -> float:
     return float(value)
 
 
+def _column_matches(columns: Iterable[str], name: str) -> list[str]:
+    return [col for col in columns if col == name or col.startswith(f"{name}.")]
+
+
+def _has_column(columns: Iterable[str], name: str) -> bool:
+    return bool(_column_matches(columns, name))
+
+
 def _pick_column(columns: Iterable[str], name: str, occurrence: int = 0) -> str:
-    matches = [col for col in columns if col == name or col.startswith(f"{name}.")]
+    matches = _column_matches(columns, name)
     if len(matches) <= occurrence:
         raise ValueError(f"缺少字段: {name}")
     return matches[occurrence]
@@ -84,6 +92,9 @@ def _pick_first_column(columns: Iterable[str], names: Iterable[str], occurrence:
             return _pick_column(columns, name, occurrence)
         except ValueError:
             missing.append(name)
+    columns = list(columns)
+    if columns:
+        return columns[0]
     raise ValueError(f"缺少字段: {' / '.join(missing)}")
 
 
@@ -126,24 +137,29 @@ def _sort_key(row: pd.Series) -> tuple:
     )
 
 
-def transform_dalian(
-    source: str | Path | BinaryIO,
-    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    raw = _read_excel(source)
-    columns = list(raw.columns)
-
-    customer_col = _pick_column(columns, "售达方", 1) if any(col == "售达方" or col.startswith("售达方.") for col in columns) else None
-    product_col = _pick_first_column(columns, ["描述", "产品名称", "品名", "物料描述", "产品描述"])
-    quantity_col = _pick_column(columns, "订购数量", 0)
-    price_col = _pick_column(columns, "单价PN00", 0)
-    currency_col = _pick_column(columns, "单价PN00", 1)
+def _mapping_by_product(customer_mapping: pd.DataFrame | str | Path | BinaryIO | None) -> dict:
     mapping = (
         load_customer_mapping(customer_mapping)
         if not isinstance(customer_mapping, pd.DataFrame)
         else customer_mapping.copy()
     )
-    mapping_by_product = mapping.set_index("产品名称").to_dict("index") if not mapping.empty else {}
+    return mapping.set_index("产品名称").to_dict("index") if not mapping.empty else {}
+
+
+def transform_order_export(
+    source: str | Path | BinaryIO,
+    exporter: str,
+    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw = _read_excel(source)
+    columns = list(raw.columns)
+
+    customer_col = _pick_column(columns, "售达方", 1) if _has_column(columns, "售达方") else None
+    product_col = _pick_first_column(columns, ["描述", "产品名称", "品名", "物料描述", "产品描述"])
+    quantity_col = _pick_column(columns, "订购数量", 0)
+    price_col = _pick_column(columns, "单价PN00", 0)
+    currency_col = _pick_column(columns, "单价PN00", 1)
+    mapping_by_product = _mapping_by_product(customer_mapping)
 
     rows = []
     unmapped_rows = []
@@ -174,7 +190,7 @@ def transform_dalian(
                 "quantity_kg": quantity_kg,
                 "price_per_kg": price_per_kg,
                 "币种": currency or "USD",
-                "出口方": "大连",
+                "出口方": exporter,
                 "_source_order": source_order,
             }
         )
@@ -195,6 +211,13 @@ def transform_dalian(
     return result.sort_values(by="_source_order", kind="stable").reset_index(drop=True), unmapped
 
 
+def transform_dalian(
+    source: str | Path | BinaryIO,
+    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return transform_order_export(source, "大连", customer_mapping)
+
+
 def _strip_product_code(value: object) -> str:
     if pd.isna(value):
         return ""
@@ -202,29 +225,78 @@ def _strip_product_code(value: object) -> str:
     return re.sub(r"^[A-Z0-9]+\s+", "", text).strip()
 
 
-def transform_tieling(source: str | Path | BinaryIO) -> pd.DataFrame:
+def transform_invoice_detail(
+    source: str | Path | BinaryIO,
+    exporter: str,
+    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
+    default_market: str = "香港",
+    default_customer: str = "大成万达（香港）有限公司",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     raw = _read_excel(source)
+    columns = list(raw.columns)
+    product_col = _pick_first_column(columns, ["生产", "产品名称", "品名", "物料描述", "产品描述"], 0)
+    quantity_col = _pick_first_column(columns, ["发票数量(kg)", "发票数量", "数量", "订购数量"], 0)
+    price_col = _pick_first_column(columns, ["销售单价", "单价", "单价PN00"], 0)
+    mapping_by_product = _mapping_by_product(customer_mapping)
+    start_row = 0
+    if not raw.empty:
+        first_quantity = raw.iloc[0][quantity_col]
+        first_price = raw.iloc[0][price_col]
+        if any(ch.isalpha() for ch in str(first_quantity)) or any(ch.isalpha() for ch in str(first_price)):
+            start_row = 1
+
     rows = []
-    for source_order, record in raw.iloc[1:].iterrows():
-        product = _strip_product_code(record.iloc[0])
-        quantity_kg = _number(record.iloc[1]) if len(record) > 1 else 0.0
-        price_per_kg = _number(record.iloc[2]) if len(record) > 2 else 0.0
+    unmapped_rows = []
+    for source_order, record in raw.iloc[start_row:].iterrows():
+        product = _strip_product_code(record[product_col])
+        quantity_kg = _number(record[quantity_col])
+        price_per_kg = _number(record[price_col])
         if not product or quantity_kg == 0:
             continue
+
+        market = default_market
+        customer = default_customer
+        if product in mapping_by_product:
+            mapped = mapping_by_product[product]
+            customer = mapped["售达方"] or customer
+            market = mapped["出口地"] or market
+        elif not default_customer:
+            unmapped_rows.append({"产品名称": product, "_source_order": source_order})
+            continue
+
         rows.append(
             {
-                "外销市场": "香港",
-                "外销客户": "大成万达（香港）有限公司",
+                "外销市场": market,
+                "外销客户": customer,
                 "产品名称": product,
                 "月销量（吨）": quantity_kg / 1000,
                 "单价(元/吨)": price_per_kg * 1000,
                 "币种": "RMB",
-                "出口方": "铁岭",
+                "出口方": exporter,
                 "_source_order": source_order,
             }
         )
 
-    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS + ["_source_order"])
+    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS + ["_source_order"]), pd.DataFrame(unmapped_rows).drop_duplicates()
+
+
+def transform_tieling(source: str | Path | BinaryIO) -> pd.DataFrame:
+    result, _ = transform_invoice_detail(source, "铁岭")
+    return result
+
+
+def transform_export_file(
+    source: str | Path | BinaryIO,
+    exporter: str,
+    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw = _read_excel(source)
+    columns = list(raw.columns)
+    if _has_column(columns, "订购数量") and _has_column(columns, "单价PN00"):
+        return transform_order_export(source, exporter, customer_mapping)
+    if _has_column(columns, "发票数量(kg)") and _has_column(columns, "销售单价"):
+        return transform_invoice_detail(source, exporter, customer_mapping)
+    raise ValueError("无法识别文件格式：需要包含“订购数量/单价PN00”或“发票数量(kg)/销售单价”")
 
 
 def build_final_table(dalian: pd.DataFrame, tieling: pd.DataFrame, include_subtotals: bool = True) -> pd.DataFrame:
@@ -255,8 +327,9 @@ def process_files(
     customer_mapping_source: str | Path | BinaryIO | None = None,
 ) -> ProcessedTables:
     customer_mapping = load_customer_mapping(customer_mapping_source)
-    dalian, unmapped = transform_dalian(dalian_source, customer_mapping)
-    tieling = transform_tieling(tieling_source)
+    dalian, dalian_unmapped = transform_export_file(dalian_source, "大连", customer_mapping)
+    tieling, tieling_unmapped = transform_export_file(tieling_source, "铁岭", customer_mapping)
+    unmapped = pd.concat([dalian_unmapped, tieling_unmapped], ignore_index=True).drop_duplicates()
     final = build_final_table(dalian, tieling, include_subtotals=True)
     return ProcessedTables(dalian=dalian[OUTPUT_COLUMNS], tieling=tieling[OUTPUT_COLUMNS], final=final, unmapped=unmapped)
 

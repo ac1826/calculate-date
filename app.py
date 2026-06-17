@@ -58,7 +58,7 @@ metric_cols[2].metric("汇整行数", len(tables.final))
 metric_cols[3].metric("总销量（吨）", f"{tables.final.loc[tables.final['产品名称'] != '小计', '月销量（吨）'].sum():.4g}")
 
 if not tables.unmapped.empty:
-    st.warning(f"有 {len(tables.unmapped)} 个大连产品未能匹配售达方，已从结果中跳过。请上传或补充清单。")
+    st.warning(f"有 {len(tables.unmapped)} 个产品未能匹配售达方，已从结果中跳过。请上传或补充清单。")
 
 tab_final, tab_dalian, tab_tieling, tab_unmapped = st.tabs(["汇整预览", "大连处理结果", "铁岭处理结果", "未匹配产品"])
 with tab_final:
