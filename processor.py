@@ -77,6 +77,16 @@ def _pick_column(columns: Iterable[str], name: str, occurrence: int = 0) -> str:
     return matches[occurrence]
 
 
+def _pick_first_column(columns: Iterable[str], names: Iterable[str], occurrence: int = 0) -> str:
+    missing = []
+    for name in names:
+        try:
+            return _pick_column(columns, name, occurrence)
+        except ValueError:
+            missing.append(name)
+    raise ValueError(f"缺少字段: {' / '.join(missing)}")
+
+
 def _market_from_text(*parts: object) -> str:
     text = " ".join("" if pd.isna(part) else str(part) for part in parts)
     return "香港" if "香港" in text else "新加坡"
@@ -124,7 +134,7 @@ def transform_dalian(
     columns = list(raw.columns)
 
     customer_col = _pick_column(columns, "售达方", 1) if any(col == "售达方" or col.startswith("售达方.") for col in columns) else None
-    product_col = _pick_column(columns, "描述")
+    product_col = _pick_first_column(columns, ["描述", "产品名称", "品名", "物料描述", "产品描述"])
     quantity_col = _pick_column(columns, "订购数量", 0)
     price_col = _pick_column(columns, "单价PN00", 0)
     currency_col = _pick_column(columns, "单价PN00", 1)
