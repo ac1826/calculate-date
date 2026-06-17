@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 import streamlit as st
 
 from processor import export_summary_workbook, infer_month_label, process_files
@@ -71,10 +69,9 @@ with tab_unmapped:
     st.dataframe(tables.unmapped, use_container_width=True, hide_index=True)
 
 workbook_bytes = export_summary_workbook(tables.final, month_label=month_label)
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 st.download_button(
     "下载汇整 Excel",
     data=workbook_bytes,
-    file_name=f"{month_label}出口数据汇整_香港&新加坡_{timestamp}.xlsx",
+    file_name=f"{month_label}出口数据汇整_香港&新加坡.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )

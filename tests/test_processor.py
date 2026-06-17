@@ -3,7 +3,14 @@ from io import BytesIO
 import pandas as pd
 from openpyxl import load_workbook
 
-from processor import export_summary_workbook, load_customer_mapping, process_files, transform_dalian, transform_export_file
+from processor import (
+    export_summary_workbook,
+    infer_month_label,
+    load_customer_mapping,
+    process_files,
+    transform_dalian,
+    transform_export_file,
+)
 
 
 def to_excel_bytes(frame: pd.DataFrame) -> BytesIO:
@@ -172,3 +179,9 @@ def test_process_files_handles_mixed_formats():
     tables = process_files(sample_invoice_detail(), sample_tieling(), sample_mapping())
     assert not tables.final.empty
     assert "小计" in set(tables.final["产品名称"])
+
+
+def test_infer_month_label_from_date_style_filenames():
+    assert infer_month_label("2026.06.17_铁岭.xlsx") == "6月"
+    assert infer_month_label("2026-11-03_大连.xlsx") == "11月"
+    assert infer_month_label("5月_铁岭.xlsx") == "5月"

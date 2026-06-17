@@ -341,6 +341,9 @@ def infer_month_label(*filenames: str | None) -> str:
         match = re.search(r"(\d{1,2})月", filename)
         if match:
             return f"{int(match.group(1))}月"
+        date_match = re.search(r"(?:^|[^\d])\d{4}[.\-_/](\d{1,2})[.\-_/]\d{1,2}(?:[^\d]|$)", filename)
+        if date_match:
+            return f"{int(date_match.group(1))}月"
     return "本月"
 
 
