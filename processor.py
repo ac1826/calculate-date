@@ -53,6 +53,7 @@ class ProcessedTables:
     dalian: pd.DataFrame
     tieling: pd.DataFrame
     final: pd.DataFrame
+    unmapped: pd.DataFrame
 
 
 def _read_excel(source: str | Path | BinaryIO) -> pd.DataFrame:
@@ -81,6 +82,28 @@ def _market_from_text(*parts: object) -> str:
     return "香港" if "香港" in text else "新加坡"
 
 
+def _clean_text(value: object) -> str:
+    return "" if pd.isna(value) else str(value).strip()
+
+
+def load_customer_mapping(source: str | Path | BinaryIO | None) -> pd.DataFrame:
+    if source is None:
+        return pd.DataFrame(columns=["出口地", "售达方", "产品名称"])
+
+    raw = pd.read_excel(source, sheet_name=0, dtype=object)
+    required = {"出口地", "售达方", "产品名称"}
+    missing = required.difference(raw.columns)
+    if missing:
+        raise ValueError(f"清单缺少字段: {', '.join(sorted(missing))}")
+
+    mapping = raw[["出口地", "售达方", "产品名称"]].copy()
+    mapping[["出口地", "售达方"]] = mapping[["出口地", "售达方"]].ffill()
+    for column in mapping.columns:
+        mapping[column] = mapping[column].map(_clean_text)
+    mapping = mapping[(mapping["产品名称"] != "") & (mapping["售达方"] != "")]
+    return mapping.drop_duplicates(subset=["产品名称"], keep="first").reset_index(drop=True)
+
+
 def _sort_key(row: pd.Series) -> tuple:
     return (
         MARKET_ORDER.get(row["外销市场"], 99),
@@ -93,30 +116,49 @@ def _sort_key(row: pd.Series) -> tuple:
     )
 
 
-def transform_dalian(source: str | Path | BinaryIO) -> pd.DataFrame:
+def transform_dalian(
+    source: str | Path | BinaryIO,
+    customer_mapping: pd.DataFrame | str | Path | BinaryIO | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     raw = _read_excel(source)
     columns = list(raw.columns)
 
-    customer_col = _pick_column(columns, "售达方", 1)
+    customer_col = _pick_column(columns, "售达方", 1) if any(col == "售达方" or col.startswith("售达方.") for col in columns) else None
     product_col = _pick_column(columns, "描述")
     quantity_col = _pick_column(columns, "订购数量", 0)
     price_col = _pick_column(columns, "单价PN00", 0)
     currency_col = _pick_column(columns, "单价PN00", 1)
+    mapping = (
+        load_customer_mapping(customer_mapping)
+        if not isinstance(customer_mapping, pd.DataFrame)
+        else customer_mapping.copy()
+    )
+    mapping_by_product = mapping.set_index("产品名称").to_dict("index") if not mapping.empty else {}
 
     rows = []
+    unmapped_rows = []
     for source_order, record in raw.iterrows():
         quantity_kg = _number(record[quantity_col])
-        customer = "" if pd.isna(record[customer_col]) else str(record[customer_col]).strip()
-        product = "" if pd.isna(record[product_col]) else str(record[product_col]).strip()
-        currency = "" if pd.isna(record[currency_col]) else str(record[currency_col]).strip()
+        customer = _clean_text(record[customer_col]) if customer_col else ""
+        product = _clean_text(record[product_col])
+        currency = _clean_text(record[currency_col])
         price_per_kg = _number(record[price_col])
+        market = _market_from_text(customer, product)
 
-        if not customer or not product:
+        if product and (not customer) and product in mapping_by_product:
+            mapped = mapping_by_product[product]
+            customer = mapped["售达方"]
+            market = mapped["出口地"] or _market_from_text(customer, product)
+
+        if not product:
+            continue
+        if not customer:
+            unmapped_rows.append({"产品名称": product, "_source_order": source_order})
             continue
 
         rows.append(
             {
-                "外销市场": _market_from_text(customer, product),
+                "外销市场": market,
                 "外销客户": customer,
                 "产品名称": product,
                 "quantity_kg": quantity_kg,
@@ -128,7 +170,7 @@ def transform_dalian(source: str | Path | BinaryIO) -> pd.DataFrame:
         )
 
     if not rows:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS + ["_source_order"])
+        return pd.DataFrame(columns=OUTPUT_COLUMNS + ["_source_order"]), pd.DataFrame(unmapped_rows).drop_duplicates()
 
     prepared = pd.DataFrame(rows)
     grouped = (
@@ -139,7 +181,8 @@ def transform_dalian(source: str | Path | BinaryIO) -> pd.DataFrame:
     grouped["月销量（吨）"] = grouped["quantity_kg"] / 1000
     grouped["单价(元/吨)"] = grouped["price_per_kg"] * 1000
     result = grouped[OUTPUT_COLUMNS + ["_source_order"]].copy()
-    return result.sort_values(by="_source_order", kind="stable").reset_index(drop=True)
+    unmapped = pd.DataFrame(unmapped_rows).drop_duplicates() if unmapped_rows else pd.DataFrame(columns=["产品名称", "_source_order"])
+    return result.sort_values(by="_source_order", kind="stable").reset_index(drop=True), unmapped
 
 
 def _strip_product_code(value: object) -> str:
@@ -196,11 +239,16 @@ def build_final_table(dalian: pd.DataFrame, tieling: pd.DataFrame, include_subto
     return pd.concat(blocks, ignore_index=True)
 
 
-def process_files(dalian_source: str | Path | BinaryIO, tieling_source: str | Path | BinaryIO) -> ProcessedTables:
-    dalian = transform_dalian(dalian_source)
+def process_files(
+    dalian_source: str | Path | BinaryIO,
+    tieling_source: str | Path | BinaryIO,
+    customer_mapping_source: str | Path | BinaryIO | None = None,
+) -> ProcessedTables:
+    customer_mapping = load_customer_mapping(customer_mapping_source)
+    dalian, unmapped = transform_dalian(dalian_source, customer_mapping)
     tieling = transform_tieling(tieling_source)
     final = build_final_table(dalian, tieling, include_subtotals=True)
-    return ProcessedTables(dalian=dalian[OUTPUT_COLUMNS], tieling=tieling[OUTPUT_COLUMNS], final=final)
+    return ProcessedTables(dalian=dalian[OUTPUT_COLUMNS], tieling=tieling[OUTPUT_COLUMNS], final=final, unmapped=unmapped)
 
 
 def infer_month_label(*filenames: str | None) -> str:

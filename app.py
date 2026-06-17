@@ -27,11 +27,13 @@ st.markdown(
 st.title("出口数据汇整")
 st.caption("上传大连和铁岭 Excel，自动生成香港/新加坡外销汇整表。")
 
-left, right = st.columns(2)
+left, middle, right = st.columns(3)
 with left:
     dalian_file = st.file_uploader("大连文件", type=["xlsx"], key="dalian")
-with right:
+with middle:
     tieling_file = st.file_uploader("铁岭文件", type=["xlsx"], key="tieling")
+with right:
+    customer_mapping_file = st.file_uploader("清单文件（可选）", type=["xlsx"], key="customer_mapping")
 
 default_month = infer_month_label(
     getattr(dalian_file, "name", None),
@@ -44,7 +46,7 @@ if not dalian_file or not tieling_file:
     st.stop()
 
 try:
-    tables = process_files(dalian_file, tieling_file)
+    tables = process_files(dalian_file, tieling_file, customer_mapping_file)
 except Exception as exc:
     st.error(f"处理失败：{exc}")
     st.stop()
@@ -55,13 +57,18 @@ metric_cols[1].metric("铁岭明细", len(tables.tieling))
 metric_cols[2].metric("汇整行数", len(tables.final))
 metric_cols[3].metric("总销量（吨）", f"{tables.final.loc[tables.final['产品名称'] != '小计', '月销量（吨）'].sum():.4g}")
 
-tab_final, tab_dalian, tab_tieling = st.tabs(["汇整预览", "大连处理结果", "铁岭处理结果"])
+if not tables.unmapped.empty:
+    st.warning(f"有 {len(tables.unmapped)} 个大连产品未能匹配售达方，已从结果中跳过。请上传或补充清单。")
+
+tab_final, tab_dalian, tab_tieling, tab_unmapped = st.tabs(["汇整预览", "大连处理结果", "铁岭处理结果", "未匹配产品"])
 with tab_final:
     st.dataframe(tables.final, use_container_width=True, hide_index=True)
 with tab_dalian:
     st.dataframe(tables.dalian, use_container_width=True, hide_index=True)
 with tab_tieling:
     st.dataframe(tables.tieling, use_container_width=True, hide_index=True)
+with tab_unmapped:
+    st.dataframe(tables.unmapped, use_container_width=True, hide_index=True)
 
 workbook_bytes = export_summary_workbook(tables.final, month_label=month_label)
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
