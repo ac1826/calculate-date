@@ -7,6 +7,11 @@ from processor import export_summary_workbook, infer_month_label, process_files
 
 st.set_page_config(page_title="出口数据汇整", page_icon="📊", layout="wide")
 
+TABLE_COLUMN_CONFIG = {
+    "月销量（吨）": st.column_config.NumberColumn("月销量（吨）", format="%.2f"),
+    "单价(元/吨)": st.column_config.NumberColumn("单价(元/吨)", format="%,.2f"),
+}
+
 st.markdown(
     """
     <style>
@@ -53,18 +58,18 @@ metric_cols = st.columns(4)
 metric_cols[0].metric("大连明细", len(tables.dalian))
 metric_cols[1].metric("铁岭明细", len(tables.tieling))
 metric_cols[2].metric("汇整行数", len(tables.final))
-metric_cols[3].metric("总销量（吨）", f"{tables.final.loc[tables.final['产品名称'] != '小计', '月销量（吨）'].sum():.4g}")
+metric_cols[3].metric("总销量（吨）", f"{tables.final.loc[tables.final['产品名称'] != '小计', '月销量（吨）'].sum():,.2f}")
 
 if not tables.unmapped.empty:
     st.warning(f"有 {len(tables.unmapped)} 个产品未能匹配售达方，已从结果中跳过。请上传或补充清单。")
 
 tab_final, tab_dalian, tab_tieling, tab_unmapped = st.tabs(["汇整预览", "大连处理结果", "铁岭处理结果", "未匹配产品"])
 with tab_final:
-    st.dataframe(tables.final, use_container_width=True, hide_index=True)
+    st.dataframe(tables.final, use_container_width=True, hide_index=True, column_config=TABLE_COLUMN_CONFIG)
 with tab_dalian:
-    st.dataframe(tables.dalian, use_container_width=True, hide_index=True)
+    st.dataframe(tables.dalian, use_container_width=True, hide_index=True, column_config=TABLE_COLUMN_CONFIG)
 with tab_tieling:
-    st.dataframe(tables.tieling, use_container_width=True, hide_index=True)
+    st.dataframe(tables.tieling, use_container_width=True, hide_index=True, column_config=TABLE_COLUMN_CONFIG)
 with tab_unmapped:
     st.dataframe(tables.unmapped, use_container_width=True, hide_index=True)
 
