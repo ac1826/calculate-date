@@ -413,7 +413,7 @@ def _style_worksheet(ws) -> None:
 
     for row in range(2, ws.max_row + 1):
         ws.cell(row=row, column=4).number_format = "0.00"
-        ws.cell(row=row, column=5).number_format = "#,##0.00"
+        ws.cell(row=row, column=5).number_format = "#,##0"
 
 
 def _merge_repeated_cells(ws) -> None:

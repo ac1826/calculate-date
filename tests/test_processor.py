@@ -138,7 +138,7 @@ def test_export_workbook_has_headers_formulas_and_merges(tmp_path):
     assert ws["D4"].value == "=SUM(D2:D3)"
     assert ws["D6"].value == "=SUM(D5:D5)"
     assert ws["D2"].number_format == "0.00"
-    assert ws["E2"].number_format == "#,##0.00"
+    assert ws["E2"].number_format == "#,##0"
     assert "A2:A4" in {str(rng) for rng in ws.merged_cells.ranges}
 
 

@@ -9,7 +9,7 @@ st.set_page_config(page_title="出口数据汇整", page_icon="📊", layout="wi
 
 TABLE_COLUMN_CONFIG = {
     "月销量（吨）": st.column_config.NumberColumn("月销量（吨）", format="%.2f"),
-    "单价(元/吨)": st.column_config.NumberColumn("单价(元/吨)", format="%,.2f"),
+    "单价(元/吨)": st.column_config.NumberColumn("单价(元/吨)", format="%,.0f"),
 }
 
 st.markdown(
